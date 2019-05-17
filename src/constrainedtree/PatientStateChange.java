@@ -1,6 +1,7 @@
 package constrainedtree;
 
-public abstract class PatientStateChange {
+public class PatientStateChange {
+    public String patientName;
     public String stateName;
     public double time;
 
@@ -10,7 +11,8 @@ public abstract class PatientStateChange {
 
     public Type type;
 
-    public PatientStateChange(String stateName, double time, Type type) {
+    public PatientStateChange(String patientName, String stateName, double time, Type type) {
+        this.patientName = patientName;
         this.stateName = stateName;
         this.time = time;
         this.type = type;

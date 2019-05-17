@@ -3,26 +3,44 @@ package constrainedtree;
 import beast.core.BEASTObject;
 import beast.core.Input;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 public class PatientStateModel extends BEASTObject {
 
-    public Input<String> csvFileNameInput = new Input<>("csvFileName",
-            "Name of CSV data file for input.",
+    public Input<String> stateLabelInput = new Input<>("stateLabel",
+            "Label for this state element",
             Input.Validate.REQUIRED);
 
-    Map<String, Map<Double, Set<String>>> patientStateMap;
+    public Input<List<PatientStateModel>> childModelsInput = new Input<>(
+            "subModel",
+            "One or more patient sub-models.",
+            new ArrayList<>());
+
+    private String stateLabel;
+
+    private List<PatientStateModel> childModels;
+    private List<String> allStateLabels;
 
     @Override
     public void initAndValidate() {
-
-        Map<String, List<PatientStateChange>> patientStateChanges;
-
+        stateLabel = stateLabelInput.get();
+        childModels = childModelsInput.get();
     }
 
-    public Set<String> getPatientState(double time) {
+    public String getStateLabel() {
+        return stateLabel;
+    }
 
+    public List<String> getAllStateLabels() {
+        if (allStateLabels == null) {
+            allStateLabels = new ArrayList<>();
+            allStateLabels.add(stateLabel);
+
+            for (PatientStateModel childModel : childModels)
+                allStateLabels.addAll(childModel.getAllStateLabels());
+        }
+
+        return allStateLabels;
     }
 }
