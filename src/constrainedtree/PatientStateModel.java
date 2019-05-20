@@ -4,6 +4,7 @@ import beast.core.BEASTObject;
 import beast.core.Input;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class PatientStateModel extends BEASTObject {
@@ -17,30 +18,54 @@ public class PatientStateModel extends BEASTObject {
             "One or more patient sub-models.",
             new ArrayList<>());
 
-    private String stateLabel;
+    private String stateName, stateValue;
 
     private List<PatientStateModel> childModels;
-    private List<String> allStateLabels;
+
+    public PatientStateModel() { }
+
+    public PatientStateModel(String stateLabel, PatientStateModel ... childModels) {
+
+        this.stateName = stateLabel;
+        this.childModels = Arrays.asList(childModels);
+    }
 
     @Override
     public void initAndValidate() {
-        stateLabel = stateLabelInput.get();
+        stateName = stateLabelInput.get();
         childModels = childModelsInput.get();
     }
 
-    public String getStateLabel() {
-        return stateLabel;
+    public PatientStateModel copy() {
+        PatientStateModel newModel = new PatientStateModel();
+        newModel.stateName = stateName;
+        newModel.stateValue = stateValue;
+        newModel.childModels = new ArrayList<>();
+
+        for (PatientStateModel childModel : childModels)
+            newModel.childModels.add(childModel.copy());
+
+        return newModel;
     }
 
-    public List<String> getAllStateLabels() {
-        if (allStateLabels == null) {
-            allStateLabels = new ArrayList<>();
-            allStateLabels.add(stateLabel);
-
-            for (PatientStateModel childModel : childModels)
-                allStateLabels.addAll(childModel.getAllStateLabels());
+    private boolean setValueRecurse (String stateName, String stateValue) {
+        if (this.stateName.equals(stateName)) {
+            this.stateValue = stateValue;
+            return true;
         }
 
-        return allStateLabels;
+        for (PatientStateModel childModel : childModels) {
+            if (childModel.setValueRecurse(stateName, stateValue))
+                return true;
+        }
+
+        return false;
+    }
+
+    public PatientStateModel setValue(String stateName, String stateValue) {
+        if (setValueRecurse(stateName, stateValue))
+            return this;
+
+        throw new IllegalArgumentException("State named " + stateName + " not found.");
     }
 }

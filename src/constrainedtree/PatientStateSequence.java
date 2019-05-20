@@ -11,6 +11,7 @@ import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class PatientStateSequence extends BEASTObject {
 
@@ -30,17 +31,19 @@ public class PatientStateSequence extends BEASTObject {
             "Patient state model.",
             Input.Validate.REQUIRED);
 
-    PatientStateModel stateModel;
+    private List<PatientStateChange> patientStateChanges;
 
-    Map<String, Map<Double, Set<String>>> patientStateMap;
-    List<PatientStateChange> patientStateChanges;
-    List<Double> patientStateChangeTimes;
+    private PatientStateModel baseStateModel;
 
-    Date finalSampleDate;
-    DateFormat dateFormat;
+    private Map<String, List<PatientStateModel>> patientStates;
+    private Map<String, List<Double>> patientStateChangeTimes;
+
+    private Date finalSampleDate;
+    private DateFormat dateFormat;
 
     @Override
     public void initAndValidate() {
+
 
         dateFormat = new SimpleDateFormat(dateFormatStringInput.get());
 
@@ -50,7 +53,7 @@ public class PatientStateSequence extends BEASTObject {
             throw new IllegalArgumentException("Error parsing finalSampleDate as a date string.");
         }
 
-        stateModel = stateModelInput.get();
+        baseStateModel = stateModelInput.get();
 
         patientStateChanges = new ArrayList<>();
 
@@ -59,37 +62,26 @@ public class PatientStateSequence extends BEASTObject {
 
             for (CSVRecord record : parser.getRecords()) {
 
-                String typeString = record.get("Event");
-                PatientStateChange.Type type = null;
-                switch(record.get("Event").toLowerCase()) {
-                    case "admission":
-                        type = PatientStateChange.Type.BEGIN;
-                        break;
-                    case "discharge":
-                        type = PatientStateChange.Type.END;
-                        break;
-                    default:
-                        break;
-                }
-
-                if (type == null)
-                    continue;
-
-
+                PatientStateChange.Type changeType =
+                        record.get("ChangeType").equals("+")
+                                ? PatientStateChange.Type.BEGIN
+                                : PatientStateChange.Type.END;
 
                 PatientStateChange change = new PatientStateChange(
-                        record.get("Patient_ID"),
-                        record.get("Hospital") + record.get("Status_Or_Ward"),
+                        record.get("PatientID"),
+                        record.get("StateName"),
+                        record.get("StateValue"),
                         getTimeFromDateString(record.get("Date")),
-                        type);
+                        record.get("Date"),
+                        changeType);
 
                 patientStateChanges.add(change);
             }
 
             patientStateChanges.sort((o1, o2) -> {
-                if (o1.time < o2.time)
-                    return -1;
                 if (o1.time > o2.time)
+                    return -1;
+                if (o1.time < o2.time)
                     return 1;
 
                 if (o1.type != o2.type) {
@@ -102,10 +94,43 @@ public class PatientStateSequence extends BEASTObject {
                 return 0;
             });
 
-                    System.out.println("Made it.");
         } catch (IOException e) {
             e.printStackTrace();
+            throw new RuntimeException("Error reading patient state change file.");
         }
+
+        // Initialize patient list:
+
+        Set<String> patients =
+                patientStateChanges.stream()
+                        .map(sc -> sc.patientName)
+                        .collect(Collectors.toSet());
+
+        patientStates = new HashMap<>();
+        for (String patient : patients) {
+            patientStates.put(patient, new ArrayList<>());
+        }
+
+        // Add state changes
+
+        for (PatientStateChange stateChange : patientStateChanges) {
+           String patient = stateChange.patientName;
+           double time = stateChange.time;
+           List<Double> thisPatientChangeTimes = patientStateChangeTimes.get(patient);
+           List<PatientStateModel> thisPatientStates = patientStates.get(patient);
+
+           PatientStateModel patientStateModel;
+           if (thisPatientChangeTimes.isEmpty())
+               patientStateModel = baseStateModel.copy();
+           else if (thisPatientChangeTimes.get(thisPatientChangeTimes.size()-1) == time)
+               patientStateModel = thisPatientStates.get(thisPatientStates.size()-1);
+           else
+               patientStateModel = thisPatientStates.get(thisPatientStates.size()-1).copy();
+
+
+        }
+
+        System.out.println("Made it.");
 
     }
 
@@ -129,9 +154,14 @@ public class PatientStateSequence extends BEASTObject {
 
     public static void main(String[] args) {
 
-        PatientStateSequence model = new PatientStateSequence();
-        model.initByName("csvFileName", "examples/PatientTimeline.csv",
+        PatientStateModel model = new PatientStateModel(
+                "Hospital",
+                new PatientStateModel("Ward"));
+
+        PatientStateSequence sequence = new PatientStateSequence();
+        sequence.initByName("csvFileName", "examples/PatientStateChanges.csv",
                 "finalSampleDate", "16/6/17",
-                "dateFormat", "dd/M/yy");
+                "dateFormat", "dd/M/yy",
+                "stateModel", model);
     }
 }
