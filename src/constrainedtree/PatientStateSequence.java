@@ -1,19 +1,37 @@
+/*
+ * Copyright (C) 2019. Tim Vaughan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package constrainedtree;
 
-import beast.core.BEASTObject;
 import beast.core.Input;
+import beast.mascot.dynamics.Dynamics;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
 
-import java.io.*;
+import java.io.FileReader;
+import java.io.IOException;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class PatientStateSequence extends BEASTObject {
+public class PatientStateSequence extends Dynamics {
 
     public Input<String> csvFileNameInput = new Input<>("csvFileName",
             "Name of CSV data file for input.",
@@ -71,7 +89,7 @@ public class PatientStateSequence extends BEASTObject {
                         record.get("PatientID"),
                         record.get("StateName"),
                         record.get("StateValue"),
-                        getTimeFromDateString(record.get("Date")),
+                        getTimeFromDateString(record.get("Date"), changeType),
                         record.get("Date"),
                         changeType);
 
@@ -134,10 +152,12 @@ public class PatientStateSequence extends BEASTObject {
 
     }
 
-    public double getTimeFromDateString(String dateString) {
+    public double getTimeFromDateString(String dateString, PatientStateChange.Type type) {
+
         try {
             Date thisDate = dateFormat.parse(dateString);
-            return (double)(finalSampleDate.getTime() - thisDate.getTime())/(24*60*60*1000.0);
+            return (double)(finalSampleDate.getTime() - thisDate.getTime()) / (24*60*60*1000.0)
+                    - (type==PatientStateChange.Type.END ? 1.0 : 0.0);
         } catch (ParseException e) {
             throw new IllegalArgumentException("Error parsing date string " + dateString + ".");
         }
@@ -163,5 +183,45 @@ public class PatientStateSequence extends BEASTObject {
                 "finalSampleDate", "16/6/17",
                 "dateFormat", "dd/M/yy",
                 "stateModel", model);
+    }
+
+    /*
+     * Dynamics implementation
+     */
+
+
+    @Override
+    public void recalculate() {
+
+    }
+
+    @Override
+    public double getInterval(int i) {
+        return 0;
+    }
+
+    @Override
+    public double[] getIntervals() {
+        return new double[0];
+    }
+
+    @Override
+    public boolean intervalIsDirty(int i) {
+        return false;
+    }
+
+    @Override
+    public double[] getCoalescentRate(int i) {
+        return new double[0];
+    }
+
+    @Override
+    public double[] getBackwardsMigration(int i) {
+        return new double[0];
+    }
+
+    @Override
+    public int getEpochCount() {
+        return 0;
     }
 }
