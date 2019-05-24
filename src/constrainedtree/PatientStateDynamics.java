@@ -18,6 +18,7 @@
 package constrainedtree;
 
 import beast.core.Input;
+import beast.core.parameter.RealParameter;
 import beast.mascot.dynamics.Dynamics;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -45,23 +46,38 @@ public class PatientStateDynamics extends Dynamics {
             "Optional format string for dates, default is yyyy-MM-dd",
             "yyyy-MM-dd");
 
-    public Input<String> stateVariablesInput = new Input<>("patientStateVariables",
+    public Input<String> stateVariableNamesInput = new Input<>("patientStateVariables",
             "Comma-delimited list of state variable names.",
             Input.Validate.REQUIRED);
 
-    private List<String> stateVariables;
-    private List<PatientStateChange> patientStateChanges;
-    private int nStates;
+    public Input<RealParameter> coalescentRateInput = new Input<>("coalescentRate",
+            "Coalescent rate parameter",
+            Input.Validate.REQUIRED);
 
-    private Map<String, List<String[]>> patientStates;
-    private Map<String, List<Double>> patientStateChangeTimes;
+    public Input<RealParameter> effectSizesInput = new Input<>("effectSizes",
+            "Parameter describing effect sizes for state variable " +
+                    "contribution to transmission rates.",
+            Input.Validate.REQUIRED);
+
+    public Input<RealParameter> migrationRateScalar = new Input<>("migrationRateScalar",
+            "Scalar migration rate.",
+            Input.Validate.REQUIRED);
+
+    private List<String> stateVariableNames;
+    private int nStateVariables;
+
+    private String[][][] stateTable;
+    private double[] stateChangeTimes;
+
+    private boolean[][][][] indicatorMatrices;
+
+    private double[] intervals;
 
     private Date finalSampleDate;
     private DateFormat dateFormat;
 
     @Override
     public void initAndValidate() {
-
 
         dateFormat = new SimpleDateFormat(dateFormatStringInput.get());
 
@@ -71,7 +87,7 @@ public class PatientStateDynamics extends Dynamics {
             throw new IllegalArgumentException("Error parsing finalSampleDate as a date string.");
         }
 
-        patientStateChanges = new ArrayList<>();
+        List<PatientStateChange> patientStateChanges = new ArrayList<>();
 
         try (FileReader reader = new FileReader(csvFileNameInput.get())){
             CSVParser parser = CSVParser.parse(reader, CSVFormat.DEFAULT.withFirstRecordAsHeader());
@@ -115,57 +131,97 @@ public class PatientStateDynamics extends Dynamics {
             throw new RuntimeException("Error reading patient state change file.");
         }
 
-        // Initialize patient list:
+        // Use unique patients to set names if they haven't already been set:
 
-        Set<String> patients =
-                patientStateChanges.stream()
-                        .map(sc -> sc.patientName)
-                        .collect(Collectors.toSet());
+        if (typeTraitInput.get() == null && typesInput.get() == null) {
+            List<String> patientNames = patientStateChanges.stream()
+                    .map(c -> c.patientName).distinct().collect(Collectors.toList());
+            typesInput.setValue(String.join(" ", patientNames), this);
+        }
 
-        stateVariables = Arrays.stream(stateVariablesInput.get().split(","))
+        super.initAndValidate();
+
+        // Initialize state variable list
+
+        stateVariableNames = Arrays.stream(stateVariableNamesInput.get().split(","))
                 .map(String::trim).collect(Collectors.toList());
 
-        nStates = stateVariables.size();
+        nStateVariables = stateVariableNames.size();
 
-        patientStates = new HashMap<>();
-        patientStateChangeTimes = new HashMap<>();
-        for (String patient : patients) {
-            patientStates.put(patient, new ArrayList<>());
-            patientStateChangeTimes.put(patient, new ArrayList<>());
+        // Build multi-patient state table
+
+        TreeSet<Double> changeTimes = new TreeSet<>();
+        int nChangeTimes = patientStateChanges.stream()
+                .map(c -> c.time).collect(Collectors.toSet()).size();
+
+        stateTable = new String[nChangeTimes][getNrTypes()][nStateVariables];
+        stateChangeTimes = new double[nChangeTimes];
+
+        int idx = 0;
+        Double prevTime = null;
+        for (PatientStateChange change : patientStateChanges) {
+            if (prevTime == null || change.time != prevTime) {
+                if (prevTime != null)
+                    idx += 1;
+
+                stateChangeTimes[idx] = change.time;
+
+                if (idx>0) {
+                    for (int pIdx = 0; pIdx < getNrTypes(); pIdx++)
+                        if (nStateVariables >= 0)
+                            System.arraycopy(stateTable[idx - 1][pIdx],
+                                    0, stateTable[idx][pIdx],
+                                    0, nStateVariables);
+                }
+
+                prevTime = change.time;
+            }
+
+            int patientIdx = getStateIndex(change.patientName);
+            int stateVariableIdx = stateVariableNames.indexOf(change.state);
+
+            if (change.type == PatientStateChange.Type.ON)
+                stateTable[idx][patientIdx][stateVariableIdx] = change.stateValue;
+            else
+                stateTable[idx][patientIdx][stateVariableIdx] = null;
         }
 
-        // Add state changes
+        // Reverse table times:
 
-        for (PatientStateChange stateChange : patientStateChanges) {
+        for (int i=0; i<stateChangeTimes.length/2; i++) {
+            double tmpTime = stateChangeTimes[i];
+            stateChangeTimes[i] = stateChangeTimes[stateChangeTimes.length-1-i];
+            stateChangeTimes[stateChangeTimes.length-1-i] = tmpTime;
 
-            String patient = stateChange.patientName.intern();
-            double time = stateChange.time;
-            List<Double> thisPatientChangeTimes = patientStateChangeTimes.get(patient);
-            List<String[]> thisPatientStates = patientStates.get(patient);
-
-            int nChanges = thisPatientChangeTimes.size();
-
-           String[] patientState;
-           if (nChanges>0) {
-               if (thisPatientChangeTimes.get(nChanges-1) == time)
-                   patientState = thisPatientStates.get(nChanges-1);
-               else {
-                   patientState = thisPatientStates.get(nChanges - 1).clone();
-                   thisPatientStates.add(patientState);
-                   thisPatientChangeTimes.add(time);
-               }
-           } else {
-               patientState = new String[nStates];
-               thisPatientStates.add(patientState);
-               thisPatientChangeTimes.add(time);
-           }
-
-           int stateIdx = stateVariables.indexOf(stateChange.state);
-           if (stateChange.type == PatientStateChange.Type.ON)
-               patientState[stateIdx] = stateChange.stateValue;
-           else
-               patientState[stateIdx] = null;
+            String[][] tmpRecord = stateTable[i];
+            stateTable[i] = stateTable[stateTable.length-1-i];
+            stateTable[stateTable.length-1-i] = tmpRecord;
         }
+
+        // Build indicator matrices:
+
+        indicatorMatrices = new boolean[nChangeTimes][nStateVariables][getNrTypes()][getNrTypes()];
+
+        for (int tIdx=0; tIdx<nChangeTimes; tIdx++) {
+            for (int svIdx=0; svIdx<nStateVariables; svIdx++) {
+                for (int i=1; i<getNrTypes(); i++) {
+                    for (int j=0; j<i; j++) {
+                        indicatorMatrices[tIdx][svIdx][i][j] = stateTable[tIdx][i][svIdx] != null
+                                && stateTable[tIdx][j][svIdx] != null
+                                && stateTable[tIdx][i][svIdx].equals(stateTable[tIdx][j][svIdx]);
+                        indicatorMatrices[tIdx][svIdx][j][i] = indicatorMatrices[tIdx][svIdx][i][j];
+                    }
+                }
+            }
+        }
+
+        // Cache interval widths:
+
+        intervals = new double[nChangeTimes];
+        intervals[0] = stateChangeTimes[0];
+        for (int tIdx=1; tIdx<nChangeTimes; tIdx++)
+            intervals[tIdx] = stateChangeTimes[tIdx] - stateChangeTimes[tIdx-1];
+
 
         System.out.println("Made it.");
 
@@ -198,7 +254,9 @@ public class PatientStateDynamics extends Dynamics {
         dynamics.initByName("csvFileName", "examples/PatientStateChanges.csv",
                 "finalSampleDate", "2017-6-16",
                 "dateFormat", "yyyy-MM-dd",
-                "patientStateVariables", "Network,Hospital,Ward");
+                "patientStateVariables", "Network,Hospital,Ward",
+                "coalescentRate", new RealParameter("1.0"),
+                "effectSizes", new RealParameter("0 0 0"));
     }
 
     /*
@@ -213,31 +271,56 @@ public class PatientStateDynamics extends Dynamics {
 
     @Override
     public double getInterval(int i) {
-        return 0;
+        return intervals[i];
     }
 
     @Override
     public double[] getIntervals() {
-        return new double[0];
+        return intervals;
     }
 
     @Override
     public boolean intervalIsDirty(int i) {
-        return false;
+        return true;
     }
+
+    private double[] coalescentRates;
 
     @Override
     public double[] getCoalescentRate(int i) {
-        return new double[0];
+        if (coalescentRates == null)
+            coalescentRates = new double[getNrTypes()];
+
+        Arrays.fill(coalescentRates, coalescentRateInput.get().getValue());
+        return coalescentRates;
     }
+
+    private double[] migrationRates;
 
     @Override
     public double[] getBackwardsMigration(int i) {
-        return new double[0];
+        if (migrationRates == null)
+            migrationRates = new double[getNrTypes()*getNrTypes()];
+
+        for (int patient1=1; patient1<getNrTypes(); patient1++) {
+            for (int patient2=0; patient2<patient1; patient2++) {
+                double logFactor = 0.0;
+
+                for (int svIdx=0; svIdx<nStateVariables; svIdx++) {
+                    if (indicatorMatrices[i][svIdx][patient1][patient2])
+                        logFactor += effectSizesInput.get().getValue(svIdx);
+                }
+
+                migrationRates[patient1*getNrTypes() + patient2] =
+                        migrationRateScalar.get().getValue()*Math.exp(logFactor);
+            }
+        }
+
+        return migrationRates;
     }
 
     @Override
     public int getEpochCount() {
-        return 0;
+        return stateChangeTimes.length;
     }
 }
