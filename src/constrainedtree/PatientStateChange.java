@@ -24,9 +24,7 @@ public class PatientStateChange {
     public double time;
     public String dateString;
 
-    public enum Type {
-        BEGIN, END
-    }
+    public enum Type { ON, OFF }
 
     public Type type;
 

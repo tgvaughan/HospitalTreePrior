@@ -31,7 +31,7 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class PatientStateSequence extends Dynamics {
+public class PatientStateDynamics extends Dynamics {
 
     public Input<String> csvFileNameInput = new Input<>("csvFileName",
             "Name of CSV data file for input.",
@@ -45,15 +45,15 @@ public class PatientStateSequence extends Dynamics {
             "Optional format string for dates, default is yyyy-MM-dd",
             "yyyy-MM-dd");
 
-    public Input<PatientStateModel> stateModelInput = new Input<>("stateModel",
-            "Patient state model.",
+    public Input<String> stateVariablesInput = new Input<>("patientStateVariables",
+            "Comma-delimited list of state variable names.",
             Input.Validate.REQUIRED);
 
+    private List<String> stateVariables;
     private List<PatientStateChange> patientStateChanges;
+    private int nStates;
 
-    private PatientStateModel baseStateModel;
-
-    private Map<String, List<PatientStateModel>> patientStates;
+    private Map<String, List<String[]>> patientStates;
     private Map<String, List<Double>> patientStateChangeTimes;
 
     private Date finalSampleDate;
@@ -71,8 +71,6 @@ public class PatientStateSequence extends Dynamics {
             throw new IllegalArgumentException("Error parsing finalSampleDate as a date string.");
         }
 
-        baseStateModel = stateModelInput.get();
-
         patientStateChanges = new ArrayList<>();
 
         try (FileReader reader = new FileReader(csvFileNameInput.get())){
@@ -82,8 +80,8 @@ public class PatientStateSequence extends Dynamics {
 
                 PatientStateChange.Type changeType =
                         record.get("ChangeType").equals("+")
-                                ? PatientStateChange.Type.BEGIN
-                                : PatientStateChange.Type.END;
+                                ? PatientStateChange.Type.ON
+                                : PatientStateChange.Type.OFF;
 
                 PatientStateChange change = new PatientStateChange(
                         record.get("PatientID"),
@@ -103,7 +101,7 @@ public class PatientStateSequence extends Dynamics {
                     return 1;
 
                 if (o1.type != o2.type) {
-                    if (o1.type == PatientStateChange.Type.BEGIN)
+                    if (o1.type == PatientStateChange.Type.OFF)
                         return -1;
                     else
                         return 1;
@@ -124,28 +122,49 @@ public class PatientStateSequence extends Dynamics {
                         .map(sc -> sc.patientName)
                         .collect(Collectors.toSet());
 
+        stateVariables = Arrays.stream(stateVariablesInput.get().split(","))
+                .map(String::trim).collect(Collectors.toList());
+
+        nStates = stateVariables.size();
+
         patientStates = new HashMap<>();
+        patientStateChangeTimes = new HashMap<>();
         for (String patient : patients) {
             patientStates.put(patient, new ArrayList<>());
+            patientStateChangeTimes.put(patient, new ArrayList<>());
         }
 
         // Add state changes
 
         for (PatientStateChange stateChange : patientStateChanges) {
-           String patient = stateChange.patientName;
-           double time = stateChange.time;
-           List<Double> thisPatientChangeTimes = patientStateChangeTimes.get(patient);
-           List<PatientStateModel> thisPatientStates = patientStates.get(patient);
 
-           PatientStateModel patientStateModel;
-           if (thisPatientChangeTimes.isEmpty())
-               patientStateModel = baseStateModel.copy();
-           else if (thisPatientChangeTimes.get(thisPatientChangeTimes.size()-1) == time)
-               patientStateModel = thisPatientStates.get(thisPatientStates.size()-1);
+            String patient = stateChange.patientName.intern();
+            double time = stateChange.time;
+            List<Double> thisPatientChangeTimes = patientStateChangeTimes.get(patient);
+            List<String[]> thisPatientStates = patientStates.get(patient);
+
+            int nChanges = thisPatientChangeTimes.size();
+
+           String[] patientState;
+           if (nChanges>0) {
+               if (thisPatientChangeTimes.get(nChanges-1) == time)
+                   patientState = thisPatientStates.get(nChanges-1);
+               else {
+                   patientState = thisPatientStates.get(nChanges - 1).clone();
+                   thisPatientStates.add(patientState);
+                   thisPatientChangeTimes.add(time);
+               }
+           } else {
+               patientState = new String[nStates];
+               thisPatientStates.add(patientState);
+               thisPatientChangeTimes.add(time);
+           }
+
+           int stateIdx = stateVariables.indexOf(stateChange.state);
+           if (stateChange.type == PatientStateChange.Type.ON)
+               patientState[stateIdx] = stateChange.stateValue;
            else
-               patientStateModel = thisPatientStates.get(thisPatientStates.size()-1).copy();
-
-
+               patientState[stateIdx] = null;
         }
 
         System.out.println("Made it.");
@@ -157,7 +176,7 @@ public class PatientStateSequence extends Dynamics {
         try {
             Date thisDate = dateFormat.parse(dateString);
             return (double)(finalSampleDate.getTime() - thisDate.getTime()) / (24*60*60*1000.0)
-                    - (type==PatientStateChange.Type.END ? 1.0 : 0.0);
+                    - (type==PatientStateChange.Type.OFF ? 1.0 : 0.0);
         } catch (ParseException e) {
             throw new IllegalArgumentException("Error parsing date string " + dateString + ".");
         }
@@ -174,15 +193,12 @@ public class PatientStateSequence extends Dynamics {
 
     public static void main(String[] args) {
 
-        PatientStateModel model = new PatientStateModel(
-                "Hospital",
-                new PatientStateModel("Ward"));
 
-        PatientStateSequence sequence = new PatientStateSequence();
-        sequence.initByName("csvFileName", "examples/PatientStateChanges.csv",
-                "finalSampleDate", "16/6/17",
-                "dateFormat", "dd/M/yy",
-                "stateModel", model);
+        PatientStateDynamics dynamics = new PatientStateDynamics();
+        dynamics.initByName("csvFileName", "examples/PatientStateChanges.csv",
+                "finalSampleDate", "2017-6-16",
+                "dateFormat", "yyyy-MM-dd",
+                "patientStateVariables", "Network,Hospital,Ward");
     }
 
     /*
